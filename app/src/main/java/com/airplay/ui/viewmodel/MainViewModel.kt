@@ -29,8 +29,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         private const val PREFS_NAME = "airplay_queue"
-        private const val POLL_INTERVAL_MS = 5000L
-        private const val STUCK_THRESHOLD = 3 // 3 * 5s = 15s stuck before skip
+        private const val POLL_INTERVAL_MS = 3000L
+        private const val STUCK_THRESHOLD = 3 // 3 * 3s = 9s stuck before skip
     }
 
     // Video list
@@ -171,7 +171,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 renderManager = manager
                 _playbackState.value = PlaybackState.BUFFERING
                 manager.playUri(streamUrl, metadata)
-                delay(3000)
+                delay(1000)
                 startPlaybackPolling()
             } catch (e: Exception) {
                 LogBuffer.e("MainViewModel", "playCurrent failed", e)
@@ -322,6 +322,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     val testPos = rm.getPositionMs()
                     if (testPos >= 0) {
+                        val currentVideo = _playQueue.value.getOrNull(_currentIndex.value)
+                        if (currentVideo != null && currentVideo.durationMs > 0 && testPos >= currentVideo.durationMs) {
+                            LogBuffer.d("MainViewModel", "Video already ended at ${testPos}ms/${currentVideo.durationMs}ms -> next")
+                            playNext()
+                            break
+                        }
                         _playbackState.value = PlaybackState.PLAYING
                         lastPositionMs = testPos
                         LogBuffer.d("MainViewModel", "Playback detected at ${testPos}ms")
@@ -339,8 +345,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 if (pos == lastPositionMs) {
                     stuckCount++
-                    if (stuckCount >= STUCK_THRESHOLD) {
-                        LogBuffer.d("MainViewModel", "Playback stuck at ${pos}ms after ${STUCK_THRESHOLD * POLL_INTERVAL_MS / 1000}s -> skip")
+                    val currentVideo = _playQueue.value.getOrNull(_currentIndex.value)
+                    val effectiveThreshold = if (currentVideo != null && currentVideo.durationMs > 0 && currentVideo.durationMs < POLL_INTERVAL_MS) 1 else STUCK_THRESHOLD
+                    if (stuckCount >= effectiveThreshold) {
+                        LogBuffer.d("MainViewModel", "Playback stuck at ${pos}ms after ${effectiveThreshold * POLL_INTERVAL_MS / 1000}s -> skip")
                         playNext()
                         break
                     }
