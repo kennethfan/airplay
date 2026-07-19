@@ -73,7 +73,7 @@ dependencies {
     implementation 'org.eclipse.jetty:jetty-io:9.4.58.v20250814'
     implementation 'org.eclipse.jetty:jetty-util:9.4.58.v20250814'
 
-    // Coil (image loading for video thumbnails)
+    // Coil (image loading for thumbnails)
     implementation 'io.coil-kt:coil-compose:2.6.0'
 
     // Coroutines
