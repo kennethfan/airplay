@@ -1,3 +1,5 @@
+[English](README.en.md) | **中文**
+
 # AirPlay — Android DLNA/AirPlay 视频投屏
 
 将手机本地视频投屏到 UPnP/DLNA 媒体渲染器（智能电视、电视盒子等）。
