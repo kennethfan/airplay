@@ -9,14 +9,20 @@ public class VideoItem {
     private final long durationMs;
     private final long fileSize;
     private final Uri thumbnailUri;
+    private final long dateAdded; // Unix timestamp (seconds), 0 if unavailable
 
     public VideoItem(long id, String name, String path, long durationMs, long fileSize, Uri thumbnailUri) {
+        this(id, name, path, durationMs, fileSize, thumbnailUri, 0L);
+    }
+
+    public VideoItem(long id, String name, String path, long durationMs, long fileSize, Uri thumbnailUri, long dateAdded) {
         this.id = id;
         this.name = name;
         this.path = path;
         this.durationMs = durationMs;
         this.fileSize = fileSize;
         this.thumbnailUri = thumbnailUri;
+        this.dateAdded = dateAdded;
     }
 
     public long getId() { return id; }
@@ -25,6 +31,7 @@ public class VideoItem {
     public long getDurationMs() { return durationMs; }
     public long getFileSize() { return fileSize; }
     public Uri getThumbnailUri() { return thumbnailUri; }
+    public long getDateAdded() { return dateAdded; }
 
     /** Format duration as HH:MM:SS or MM:SS */
     public String getDurationFormatted() {

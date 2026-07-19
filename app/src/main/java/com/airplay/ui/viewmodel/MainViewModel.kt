@@ -2,6 +2,7 @@ package com.airplay.ui.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.airplay.AirPlayApp
@@ -36,6 +37,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Video list
     private val _videos = MutableStateFlow<List<VideoItem>>(emptyList())
     val videos: StateFlow<List<VideoItem>> = _videos.asStateFlow()
+
+    // Video scanning loading state (separate from device discovery)
+    // Initial value true so the first composition renders shimmer immediately,
+    // never the "no videos" empty state.
+    private val _isLoadingVideos = MutableStateFlow(true)
+    val isLoadingVideos: StateFlow<Boolean> = _isLoadingVideos.asStateFlow()
+
+    // Resolved thumbnail URIs, one per video, resolved lazily on demand
+    private val _thumbnailUris = MutableStateFlow<Map<Long, Uri>>(emptyMap())
+    val thumbnailUris: StateFlow<Map<Long, Uri>> = _thumbnailUris.asStateFlow()
+
+    // Dedup set to prevent concurrent duplicate resolution for the same video
+    private val _pendingThumbnailIds = mutableSetOf<Long>()
 
     // Cast devices
     private val _devices = MutableStateFlow<List<CastDevice>>(emptyList())
@@ -101,10 +115,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadVideos() {
+        _isLoadingVideos.value = true
+        // Don't clear _thumbnailUris or _pendingThumbnailIds — existing thumbnails
+        // are preserved across refreshes so the grid never flashes default icons.
+
         viewModelScope.launch(Dispatchers.IO) {
-            val results = VideoScanner.scanVideos(getApplication())
-            _videos.value = results
+            val videos = VideoScanner.scanVideos(getApplication())
+            _videos.value = videos
+
+            _isLoadingVideos.value = false
             tryRestoreQueue()
+        }
+    }
+
+    /** Resolve a single video's thumbnail lazily (called when item becomes visible). */
+    fun resolveThumbnail(videoId: Long) {
+        // Already resolved or being resolved
+        if (videoId in _thumbnailUris.value || videoId in _pendingThumbnailIds) return
+        _pendingThumbnailIds.add(videoId)
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val video = _videos.value.find { it.id == videoId } ?: return@launch
+            val uri = VideoScanner.resolveThumbnail(
+                getApplication(), videoId, video.path, video.name
+            )
+            if (uri != null) {
+                _thumbnailUris.value = _thumbnailUris.value + (videoId to uri)
+            }
+            _pendingThumbnailIds.remove(videoId)
         }
     }
 
