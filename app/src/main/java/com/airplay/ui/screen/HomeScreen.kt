@@ -8,30 +8,77 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.BugReport
-import androidx.compose.material.icons.filled.Cast
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.AlertDialog
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
@@ -58,12 +105,18 @@ fun HomeScreen(
     val isQueueActive = playQueue.isNotEmpty() && currentIndex >= 0
     val currentQueueVideo = viewModel.currentQueueVideo
 
-    var showDeviceSheet by remember { mutableStateOf(false) }
-    var selectedVideo by remember { mutableStateOf<VideoItem?>(null) }
-
     // Multi-select state
     var isMultiSelectMode by remember { mutableStateOf(false) }
     var selectedVideos by remember { mutableStateOf(setOf<VideoItem>()) }
+
+    // Device sheet state
+    var showDeviceSheet by remember { mutableStateOf(false) }
+    var pendingSingleVideo by remember { mutableStateOf<VideoItem?>(null) }
+    var pendingMultiVideos by remember { mutableStateOf<List<VideoItem>?>(null) }
+    val isMultiCast = pendingMultiVideos != null
+
+    // Debug dialog
+    var showDebugDialog by remember { mutableStateOf(false) }
 
     // Determine required permission based on API level
     val videoPermission = remember {
@@ -81,9 +134,7 @@ fun HomeScreen(
     }
 
     var permissionRequested by remember { mutableStateOf(false) }
-
     var permissionDenied by remember { mutableStateOf(false) }
-    var showDebugDialog by remember { mutableStateOf(false) }
 
     // Permission request launcher
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -113,236 +164,327 @@ fun HomeScreen(
         topBar = {
             if (isMultiSelectMode) {
                 TopAppBar(
-                    title = { Text("已选择 ${selectedVideos.size} 项") },
+                    title = {
+                        Text(
+                            "已选择 ${selectedVideos.size} 项",
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    },
                     navigationIcon = {
                         IconButton(onClick = {
                             selectedVideos = emptySet()
                             isMultiSelectMode = false
                         }) {
-                            Icon(Icons.Default.Close, contentDescription = "取消")
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "取消选择",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
                         }
-                    }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        titleContentColor = MaterialTheme.colorScheme.onSurface
+                    )
                 )
             } else {
                 TopAppBar(
-                    title = { Text("AirPlay") },
+                    title = {
+                        Text(
+                            "本地视频",
+                            fontWeight = FontWeight.Bold
+                        )
+                    },
                     actions = {
                         IconButton(
                             onClick = { viewModel.refreshDiscovery() },
                             enabled = !isScanning
                         ) {
-                            Icon(Icons.Default.Refresh, contentDescription = "重新搜索")
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "重新搜索",
+                                tint = if (isScanning) {
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                }
+                            )
                         }
                         IconButton(onClick = { showDebugDialog = true }) {
-                            Icon(Icons.Default.BugReport, contentDescription = "调试日志")
+                            Icon(
+                                Icons.Default.BugReport,
+                                contentDescription = "调试日志",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
                         }
-                    }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        titleContentColor = MaterialTheme.colorScheme.onSurface
+                    )
                 )
             }
         },
         bottomBar = {
-            Column {
-                // Queue status banner
-                if (isQueueActive && currentQueueVideo != null && currentDevice != null) {
-                    Card(
-                        onClick = { /* TODO: navigate to player */ },
+            if (isMultiSelectMode && selectedVideos.isNotEmpty()) {
+                Surface(
+                    tonalElevation = 4.dp,
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 8.dp
+                ) {
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "已选择 ${selectedVideos.size} 个视频",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    "正在播放",
-                                    style = MaterialTheme.typography.labelSmall
-                                )
-                                Text(
-                                    "${currentQueueVideo.name} → ${currentDevice!!.name}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            Icon(Icons.Default.ArrowForward, contentDescription = "前往播放")
-                        }
-                    }
-                }
-
-                // Multi-select bottom bar
-                if (isMultiSelectMode && selectedVideos.isNotEmpty()) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "已选择 ${selectedVideos.size} 个视频",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            Button(onClick = {
+                        Button(
+                            onClick = {
                                 if (devices.isNotEmpty()) {
+                                    pendingMultiVideos = selectedVideos.toList()
+                                    pendingSingleVideo = null
                                     showDeviceSheet = true
                                 }
-                            }) {
-                                Text("投屏选中 (${selectedVideos.size})")
-                            }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary
+                            )
+                        ) {
+                            Icon(
+                                Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("投屏选中 (${selectedVideos.size})")
                         }
                     }
                 }
             }
         }
     ) { padding ->
-        Column(modifier = Modifier.padding(padding)) {
-            // Device section
-            Text(
-                "可投屏设备",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
-
-            if (isScanning) {
-                LinearProgressIndicator(
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            // Queue banner — between TopAppBar and grid
+            if (isQueueActive && currentQueueVideo != null && currentDevice != null) {
+                Card(
+                    onClick = { /* TODO: navigate to player */ },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-                Text(
-                    "正在搜索设备…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-            }
-
-            if (devices.isEmpty() && !isScanning) {
-                Text(
-                    "未找到可投屏的设备",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-                Text(
-                    "请确保：\n• 手机和电视连接同一 WiFi\n• 电视已开启 DLNA/投屏功能\n• 路由器未开启 AP 隔离（部分小米路由器默认开启）",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = { viewModel.refreshDiscovery() },
-                    modifier = Modifier.padding(horizontal = 16.dp)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    shape = MaterialTheme.shapes.medium,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                    )
                 ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("重新搜索")
-                }
-            }
-
-            LazyColumn(
-                modifier = Modifier.heightIn(max = 120.dp)
-            ) {
-                items(devices) { device ->
-                    DeviceItem(device)
-                }
-            }
-
-            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-
-            // Video list section
-            Text(
-                "本地视频",
-                style = MaterialTheme.typography.titleSmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-            )
-
-            if (permissionDenied) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            "需要访问视频文件的权限",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedButton(onClick = { permissionLauncher.launch(videoPermission) }) {
-                            Text("授予权限")
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "正在播放",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                            )
+                            Text(
+                                "${currentQueueVideo.name} → ${currentDevice!!.name}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = "前往播放",
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
-            } else if (videos.isEmpty()) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "未找到视频文件",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            } else {
-                LazyColumn {
-                    items(videos, key = { it.id }) { video ->
-                        val isSelected = video in selectedVideos
-                        VideoListItem(
-                            video = video,
-                            isMultiSelectMode = isMultiSelectMode,
-                            isSelected = isSelected,
-                            onClick = {
-                                if (isMultiSelectMode) {
-                                    // Toggle selection
-                                    selectedVideos = if (isSelected) {
-                                        selectedVideos - video
-                                    } else {
-                                        selectedVideos + video
-                                    }
-                                    if (selectedVideos.isEmpty()) {
-                                        isMultiSelectMode = false
-                                    }
-                                } else {
-                                    selectedVideo = video
-                                    if (devices.isNotEmpty()) {
-                                        showDeviceSheet = true
-                                    }
-                                }
-                            },
-                            onLongClick = {
-                                if (isMultiSelectMode && isSelected) {
-                                    // Long press on already selected item → cast just this item
-                                    selectedVideos = emptySet()
-                                    isMultiSelectMode = false
-                                    selectedVideo = video
-                                    if (devices.isNotEmpty()) {
-                                        showDeviceSheet = true
-                                    }
-                                } else {
-                                    // Enter multi-select mode, select this item
-                                    isMultiSelectMode = true
-                                    selectedVideos = setOf(video)
-                                }
+            }
+
+            // Main content area
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                when {
+                    // Permission denied
+                    permissionDenied -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                Icons.Default.BugReport,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                                modifier = Modifier.size(64.dp)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                "需要访问视频文件的权限",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "请在设置中允许访问媒体文件",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(24.dp))
+                            Button(
+                                onClick = { permissionLauncher.launch(videoPermission) },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Text("授予权限")
                             }
-                        )
+                        }
+                    }
+
+                    // First-time loading shimmer
+                    videos.isEmpty() && isScanning -> {
+                        ShimmerGrid()
+                    }
+
+                    // No videos found after scan
+                    videos.isEmpty() -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                Icons.Default.BugReport,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                                modifier = Modifier.size(64.dp)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                "未找到视频文件",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                "将视频文件放入设备存储中即可显示",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(24.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    viewModel.loadVideos()
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("重新扫描")
+                            }
+                        }
+                    }
+
+                    // Video grid
+                    else -> {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(2),
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(
+                                start = 8.dp,
+                                end = 8.dp,
+                                top = 8.dp,
+                                bottom = 8.dp
+                            ),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(videos, key = { it.id }) { video ->
+                                val isSelected = video in selectedVideos
+                                VideoGridItem(
+                                    video = video,
+                                    isMultiSelectMode = isMultiSelectMode,
+                                    isSelected = isSelected,
+                                    onClick = {
+                                        if (isMultiSelectMode) {
+                                            // Toggle selection
+                                            selectedVideos = if (isSelected) {
+                                                selectedVideos - video
+                                            } else {
+                                                selectedVideos + video
+                                            }
+                                            if (selectedVideos.isEmpty()) {
+                                                isMultiSelectMode = false
+                                            }
+                                        } else {
+                                            // Single tap → show device sheet
+                                            pendingSingleVideo = video
+                                            pendingMultiVideos = null
+                                            showDeviceSheet = true
+                                        }
+                                    },
+                                    onLongClick = {
+                                        if (isMultiSelectMode) {
+                                            if (isSelected && selectedVideos.size == 1) {
+                                                // Long press on the only selected item → exit multi-select, cast this item
+                                                selectedVideos = emptySet()
+                                                isMultiSelectMode = false
+                                                pendingSingleVideo = video
+                                                pendingMultiVideos = null
+                                                showDeviceSheet = true
+                                            }
+                                            // If multiple selected, long-press does nothing
+                                        } else {
+                                            // Enter multi-select mode
+                                            isMultiSelectMode = true
+                                            selectedVideos = setOf(video)
+                                        }
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
+    // ── Debug Log Dialog ──
     if (showDebugDialog) {
         AlertDialog(
             onDismissRequest = { showDebugDialog = false },
@@ -360,9 +502,15 @@ fun HomeScreen(
                             Text("刷新")
                         }
                         OutlinedButton(onClick = {
-                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("AirPlay Logs", logText))
-                            Toast.makeText(context, "日志已复制到剪贴板", Toast.LENGTH_SHORT).show()
+                            val clipboard = context.getSystemService(
+                                android.content.Context.CLIPBOARD_SERVICE
+                            ) as ClipboardManager
+                            clipboard.setPrimaryClip(
+                                ClipData.newPlainText("AirPlay Logs", logText)
+                            )
+                            Toast.makeText(
+                                context, "日志已复制到剪贴板", Toast.LENGTH_SHORT
+                            ).show()
                         }) {
                             Text("复制日志")
                         }
@@ -392,133 +540,181 @@ fun HomeScreen(
         )
     }
 
-    // Device selection bottom sheet
-    val multiCastVideoList = if (isMultiSelectMode && selectedVideos.isNotEmpty()) {
-        selectedVideos.toList()
-    } else {
-        emptyList()
-    }
-    val isMultiCast = multiCastVideoList.isNotEmpty()
-
-    if (showDeviceSheet && (selectedVideo != null || isMultiCast)) {
-        ModalBottomSheet(onDismissRequest = {
-            showDeviceSheet = false
-            if (!isMultiCast) {
-                selectedVideo = null
-            }
-        }) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    "选择投屏设备",
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(bottom = 16.dp)
-                )
+    // ── Device Selection Bottom Sheet ──
+    if (showDeviceSheet && (pendingSingleVideo != null || pendingMultiVideos != null)) {
+        val subtitle = if (isMultiCast) {
+            "已选择 ${pendingMultiVideos!!.size} 个视频，将依次投屏"
+        } else {
+            "正在播放: ${pendingSingleVideo!!.name}"
+        }
+        DeviceSelectionSheet(
+            devices = devices,
+            isScanning = isScanning,
+            title = "选择投屏设备",
+            subtitle = subtitle,
+            isMultiCast = isMultiCast,
+            onDeviceSelected = { device ->
+                showDeviceSheet = false
                 if (isMultiCast) {
-                    Text(
-                        "已选择 ${selectedVideos.size} 个视频, 将依次投屏",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 16.dp)
-                    )
-                } else if (selectedVideo != null) {
-                    Text(
-                        "正在播放: ${selectedVideo!!.name}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 16.dp)
-                    )
+                    onCastMultiple(pendingMultiVideos!!, device)
+                    pendingMultiVideos = null
+                    selectedVideos = emptySet()
+                    isMultiSelectMode = false
+                } else {
+                    onCast(pendingSingleVideo!!, device)
+                    pendingSingleVideo = null
                 }
-                devices.forEach { device ->
-                    DeviceSelectionItem(
-                        device = device,
-                        onClick = {
-                            showDeviceSheet = false
-                            if (isMultiCast) {
-                                onCastMultiple(multiCastVideoList, device)
-                                selectedVideos = emptySet()
-                                isMultiSelectMode = false
-                            } else if (selectedVideo != null) {
-                                onCast(selectedVideo!!, device)
-                                selectedVideo = null
-                            }
-                        }
+            },
+            onDismiss = {
+                showDeviceSheet = false
+                pendingSingleVideo = null
+                pendingMultiVideos = null
+            },
+            onRefresh = { viewModel.refreshDiscovery() }
+        )
+    }
+}
+
+// ──────────────────────────────────────────────────────────────
+// Shimmer loading grid
+// ──────────────────────────────────────────────────────────────
+
+@Composable
+private fun ShimmerGrid() {
+    val infiniteTransition = rememberInfiniteTransition(label = "shimmerGrid")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.25f,
+        targetValue = 0.65f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1000),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "shimmerAlpha"
+    )
+
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(2),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(
+            start = 8.dp, end = 8.dp, top = 8.dp, bottom = 8.dp
+        ),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(8) {
+            Card(
+                modifier = Modifier.aspectRatio(16f / 9f),
+                shape = MaterialTheme.shapes.medium,
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
+                        alpha = alpha
                     )
-                }
-                Spacer(modifier = Modifier.height(32.dp))
-            }
+                )
+            ) { /* empty placeholder */ }
         }
     }
 }
 
-@Composable
-private fun DeviceItem(device: CastDevice) {
-    ListItem(
-        headlineContent = { Text(device.name) },
-        supportingContent = { Text(device.ipAddress, style = MaterialTheme.typography.bodySmall) },
-        leadingContent = {
-            Icon(Icons.Default.Cast, contentDescription = null)
-        },
-        modifier = Modifier.heightIn(min = 48.dp)
-    )
-}
-
-@Composable
-private fun DeviceSelectionItem(device: CastDevice, onClick: () -> Unit) {
-    ListItem(
-        headlineContent = { Text(device.name) },
-        supportingContent = { Text(device.ipAddress) },
-        leadingContent = {
-            Icon(Icons.Default.Cast, contentDescription = null)
-        },
-        modifier = Modifier.clickable(onClick = onClick)
-    )
-}
+// ──────────────────────────────────────────────────────────────
+// Video grid item card (Netflix-style)
+// ──────────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun VideoListItem(
+private fun VideoGridItem(
     video: VideoItem,
-    isMultiSelectMode: Boolean = false,
-    isSelected: Boolean = false,
+    isMultiSelectMode: Boolean,
+    isSelected: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    ListItem(
-        headlineContent = {
-            Text(
-                video.name,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            ),
+        shape = MaterialTheme.shapes.medium,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Box(modifier = Modifier.aspectRatio(16f / 9f)) {
+            // Thumbnail
+            AsyncImage(
+                model = video.thumbnailUri,
+                contentDescription = video.name,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(MaterialTheme.shapes.medium),
+                contentScale = ContentScale.Crop
             )
-        },
-        supportingContent = {
-            Text(video.durationFormatted)
-        },
-        leadingContent = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (isMultiSelectMode) {
-                    Checkbox(
-                        checked = isSelected,
-                        onCheckedChange = { onClick() }
+
+            // Gradient overlay at the bottom for text readability
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.5f)
+                    .align(Alignment.BottomCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.85f)
+                            )
+                        )
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                }
-                AsyncImage(
-                    model = video.thumbnailUri,
-                    contentDescription = null,
-                    modifier = Modifier.size(64.dp),
-                    contentScale = ContentScale.Crop
+            )
+
+            // Video title — overlaid on gradient
+            Text(
+                text = video.name,
+                style = MaterialTheme.typography.labelLarge,
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            )
+
+            // Duration pill — top-right corner
+            Surface(
+                shape = RoundedCornerShape(4.dp),
+                color = Color.Black.copy(alpha = 0.6f),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+            ) {
+                Text(
+                    text = video.durationFormatted,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 11.sp
+                    ),
+                    color = Color.White,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                 )
             }
-        },
-        trailingContent = {
-            if (!isMultiSelectMode) {
-                Icon(Icons.Default.Cast, contentDescription = "投屏")
+
+            // Multi-select checkbox — top-left corner
+            if (isMultiSelectMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onClick() },
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(4.dp),
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = MaterialTheme.colorScheme.primary,
+                        uncheckedColor = Color.White.copy(alpha = 0.8f),
+                        checkmarkColor = Color.White
+                    )
+                )
             }
-        },
-        modifier = Modifier.combinedClickable(
-            onClick = onClick,
-            onLongClick = onLongClick
-        )
-    )
+        }
+    }
 }
