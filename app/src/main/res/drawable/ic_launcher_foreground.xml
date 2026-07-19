@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Play triangle icon -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M42,34v40l32,-20z" />
+    <!-- Cast/wifi icon -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M30,58v4h4c0,-2.2 -1.8,-4 -4,-4zM30,66v4h8c0,-4.4 -3.6,-8 -8,-8zM30,50v4c6.6,0 12,5.4 12,12h4c0,-8.8 -7.2,-16 -16,-16z" />
+</vector>

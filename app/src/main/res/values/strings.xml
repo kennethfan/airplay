@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AirPlay</string>
+    <string name="no_videos_found">未找到视频文件</string>
+    <string name="no_devices_found">未找到可投屏的设备</string>
+    <string name="searching_devices">正在搜索电视…</string>
+    <string name="tap_to_cast">点击投屏到电视</string>
+    <string name="now_playing">正在播放</string>
+</resources>
