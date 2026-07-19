@@ -14,31 +14,40 @@ import com.airplay.model.VideoItem;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 public class VideoScanner {
     private static final String TAG = "VideoScanner";
 
     public static List<VideoItem> scanVideos(Context context) {
-        // First try: strict query (duration > 5s)
-        List<VideoItem> videos = queryVideos(context,
-                MediaStore.Video.Media.DURATION + " > ?", new String[]{ "5000" },
-                MediaStore.Video.Media.DATE_ADDED + " DESC", "strict");
+        // Single query without duration filter — some devices return null for DURATION,
+        // making a SQL WHERE clause useless and requiring a second query.
+        // We filter short videos (< 5s) in Java instead.
+        List<VideoItem> videos = queryVideos(context);
 
-        // Second try: no duration filter (maybe duration column is null on some devices)
-        if (videos.isEmpty()) {
-            Log.d(TAG, "Strict query returned 0, trying broad query...");
-            videos = queryVideos(context, null, null,
-                    MediaStore.Video.Media.DATE_ADDED + " DESC", "broad");
+        // Exclude short clips (ringtones, notifications, etc.)
+        List<VideoItem> filtered = new ArrayList<>();
+        for (VideoItem v : videos) {
+            if (v.getDurationMs() >= 5000) {
+                filtered.add(v);
+            }
         }
 
-        Log.d(TAG, "Total videos found: " + videos.size());
-        return videos;
+        // Sort by date added descending in memory (avoids slow ContentProvider-side ORDER BY)
+        Collections.sort(filtered, new Comparator<VideoItem>() {
+            @Override
+            public int compare(VideoItem a, VideoItem b) {
+                return Long.compare(b.getDateAdded(), a.getDateAdded());
+            }
+        });
+
+        Log.d(TAG, "Total videos found: " + filtered.size() + " (filtered from " + videos.size() + ")");
+        return filtered;
     }
 
-    private static List<VideoItem> queryVideos(Context context,
-                                                String selection, String[] selectionArgs,
-                                                String sortOrder, String label) {
+    private static List<VideoItem> queryVideos(Context context) {
         List<VideoItem> videos = new ArrayList<>();
         ContentResolver resolver = context.getContentResolver();
 
@@ -48,28 +57,28 @@ public class VideoScanner {
             MediaStore.Video.Media.DATA,
             MediaStore.Video.Media.DURATION,
             MediaStore.Video.Media.SIZE,
-            MediaStore.Video.Media.MIME_TYPE
+            MediaStore.Video.Media.DATE_ADDED
         };
 
-        Log.d(TAG, "[" + label + "] querying with selection: " + selection);
+        Log.d(TAG, "querying all videos...");
 
         try (Cursor cursor = resolver.query(
                 MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                projection, selection, selectionArgs, sortOrder)) {
+                projection, null, null, null)) {
 
             if (cursor == null) {
-                Log.w(TAG, "[" + label + "] cursor is null");
+                Log.w(TAG, "cursor is null");
                 return videos;
             }
 
-            Log.d(TAG, "[" + label + "] cursor count=" + cursor.getCount() + " cols=" + cursor.getColumnCount());
+            Log.d(TAG, "cursor count=" + cursor.getCount() + " cols=" + cursor.getColumnCount());
 
-            int idCol     = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID);
-            int nameCol   = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME);
-            int dataCol   = cursor.getColumnIndex(MediaStore.Video.Media.DATA);
-            int durCol    = cursor.getColumnIndex(MediaStore.Video.Media.DURATION);
-            int sizeCol   = cursor.getColumnIndex(MediaStore.Video.Media.SIZE);
-            int mimeCol   = cursor.getColumnIndex(MediaStore.Video.Media.MIME_TYPE);
+            int idCol      = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID);
+            int nameCol    = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME);
+            int dataCol    = cursor.getColumnIndex(MediaStore.Video.Media.DATA);
+            int durCol     = cursor.getColumnIndex(MediaStore.Video.Media.DURATION);
+            int sizeCol    = cursor.getColumnIndex(MediaStore.Video.Media.SIZE);
+            int dateCol    = cursor.getColumnIndex(MediaStore.Video.Media.DATE_ADDED);
 
             while (cursor.moveToNext()) {
                 long id       = cursor.getLong(idCol);
@@ -77,58 +86,59 @@ public class VideoScanner {
                 String path   = dataCol >= 0 ? cursor.getString(dataCol) : null;
                 long duration = durCol >= 0 ? cursor.getLong(durCol) : 0;
                 long size     = sizeCol >= 0 ? cursor.getLong(sizeCol) : 0;
-                String mime   = mimeCol >= 0 ? cursor.getString(mimeCol) : "";
+                long dateAdded = dateCol >= 0 ? cursor.getLong(dateCol) : 0;
 
                 // On Android 10+, DATA column may be null; fall back to content URI
                 if (path == null || path.isEmpty()) {
                     Uri contentUri = ContentUris.withAppendedId(
                         MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id);
                     path = contentUri.toString();
-                    Log.d(TAG, "[" + label + "] DATA is null for " + name + ", using content URI: " + path);
+                    Log.d(TAG, "DATA is null for " + name + ", using content URI: " + path);
                 }
 
-                Uri thumbUri = getOrCreateThumbnailUri(context, id, path, name);
+                // Use content URI as placeholder thumbnail — real thumbnails resolved async later
+                Uri placeholderThumb = ContentUris.withAppendedId(
+                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id);
 
-                videos.add(new VideoItem(id, name, path, duration, size, thumbUri));
-                Log.d(TAG, "[" + label + "] found: " + name + " (" + mime + ") path=" + path);
+                videos.add(new VideoItem(id, name, path, duration, size, placeholderThumb, dateAdded));
+                Log.d(TAG, "found: " + name + " path=" + path);
             }
         } catch (Exception e) {
-            Log.e(TAG, "[" + label + "] query failed", e);
+            Log.e(TAG, "query failed", e);
         }
 
         return videos;
     }
 
     /**
-     * Resolves a thumbnail URI for the given video.
-     *
-     * Strategy (in order):
-     * 1. Query the system videothumbnails table by video_id to get the real thumbnail _ID
-     * 2. Fall back to generating a thumbnail via MediaStore.Video.Thumbnails API, cached to a local JPEG
-     * 3. Ultimate fallback: the video content URI itself (UI will show ErrorFallback)
+     * Resolves a single thumbnail URI for the given video.
+     * Priority: disk cache > system thumbnails table > generate + cache.
+     * Returns null if all strategies fail (UI will show ErrorFallback).
      */
-    private static Uri getOrCreateThumbnailUri(Context context, long videoId, String videoPath, String displayName) {
+    public static Uri resolveThumbnail(Context context, long videoId, String videoPath, String displayName) {
+        // Priority 1: Disk cache (fastest — no DB query)
+        File cached = getCachedFile(context, videoId);
+        if (cached != null) {
+            Log.d(TAG, "Cache hit for " + displayName + " -> " + cached);
+            return Uri.fromFile(cached);
+        }
+
         ContentResolver resolver = context.getContentResolver();
 
-        // Strategy 1: Query the thumbnails table with the correct video_id column
+        // Priority 2: System videothumbnails table
         Uri systemUri = querySystemThumbnailUri(resolver, videoId);
         if (systemUri != null) {
-            Log.d(TAG, "Using system thumbnail for " + displayName + " -> " + systemUri);
+            Log.d(TAG, "System thumbnail for " + displayName + " -> " + systemUri);
             return systemUri;
         }
 
-        // Strategy 2: Generate thumbnail via system API and cache to local file
-        Uri cachedUri = generateAndCacheThumbnail(context, videoId, videoPath, displayName);
-        if (cachedUri != null) {
-            Log.d(TAG, "Using cached thumbnail for " + displayName + " -> " + cachedUri);
-            return cachedUri;
+        // Priority 3: Generate from video and cache
+        Uri generatedUri = generateAndCacheThumbnail(context, videoId, videoPath, displayName);
+        if (generatedUri != null) {
+            Log.d(TAG, "Generated thumbnail for " + displayName + " -> " + generatedUri);
         }
 
-        // Strategy 3: Fallback to video content URI (Coil will fail, UI shows ErrorFallback)
-        Uri fallback = ContentUris.withAppendedId(
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI, videoId);
-        Log.w(TAG, "No thumbnail available for " + displayName + ", using fallback: " + fallback);
-        return fallback;
+        return generatedUri;
     }
 
     /**
@@ -151,6 +161,15 @@ public class VideoScanner {
             Log.w(TAG, "querySystemThumbnailUri failed for video " + videoId, e);
         }
         return null;
+    }
+
+    /**
+     * Returns the cached thumbnail file for the given video, or null if not cached.
+     */
+    private static File getCachedFile(Context context, long videoId) {
+        File cacheDir = new File(context.getCacheDir(), "thumbs");
+        File cacheFile = new File(cacheDir, "thumb_" + videoId + ".jpg");
+        return cacheFile.exists() ? cacheFile : null;
     }
 
     /**
