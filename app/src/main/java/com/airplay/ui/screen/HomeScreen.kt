@@ -3,6 +3,7 @@ package com.airplay.ui.screen
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.os.Build
 import android.widget.Toast
@@ -65,6 +66,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -102,6 +104,8 @@ fun HomeScreen(
     val videos by viewModel.videos.collectAsState()
     val devices by viewModel.devices.collectAsState()
     val isScanning by viewModel.isScanning.collectAsState()
+    val isLoadingVideos by viewModel.isLoadingVideos.collectAsState()
+    val thumbnails by viewModel.thumbnailUris.collectAsState()
     val playQueue by viewModel.playQueue.collectAsState()
     val currentIndex by viewModel.currentIndex.collectAsState()
     val currentDevice by viewModel.currentDevice.collectAsState()
@@ -201,13 +205,13 @@ fun HomeScreen(
                     },
                     actions = {
                         IconButton(
-                            onClick = { viewModel.refreshDiscovery() },
-                            enabled = !isScanning
+                            onClick = { viewModel.loadVideos() },
+                            enabled = !isLoadingVideos
                         ) {
                             Icon(
                                 Icons.Default.Refresh,
                                 contentDescription = "重新搜索",
-                                tint = if (isScanning) {
+                                tint = if (isLoadingVideos) {
                                     MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                                 } else {
                                     MaterialTheme.colorScheme.onSurface
@@ -373,8 +377,8 @@ fun HomeScreen(
                         }
                     }
 
-                    // First-time loading shimmer
-                    videos.isEmpty() && isScanning -> {
+                    // Loading shimmer (video scanning in progress)
+                    videos.isEmpty() && isLoadingVideos -> {
                         ShimmerGrid()
                     }
 
@@ -440,8 +444,13 @@ fun HomeScreen(
                         ) {
                             items(videos, key = { it.id }) { video ->
                                 val isSelected = video in selectedVideos
+                                val resolvedThumb = thumbnails[video.id]
+                                LaunchedEffect(video.id) {
+                                    viewModel.resolveThumbnail(video.id)
+                                }
                                 VideoGridItem(
                                     video = video,
+                                    thumbnailUri = resolvedThumb,
                                     isMultiSelectMode = isMultiSelectMode,
                                     isSelected = isSelected,
                                     onClick = {
@@ -596,25 +605,42 @@ private fun ShimmerGrid() {
         label = "shimmerAlpha"
     )
 
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            start = 8.dp, end = 8.dp, top = 8.dp, bottom = 8.dp
-        ),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        items(8) {
-            Card(
-                modifier = Modifier.aspectRatio(16f / 9f),
-                shape = MaterialTheme.shapes.medium,
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
-                        alpha = alpha
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 8.dp, end = 8.dp, top = 48.dp, bottom = 8.dp
+            ),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(8) {
+                Card(
+                    modifier = Modifier.aspectRatio(16f / 9f),
+                    shape = MaterialTheme.shapes.medium,
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(
+                            alpha = alpha
+                        )
                     )
-                )
-            ) { /* empty placeholder */ }
+                ) { /* empty placeholder */ }
+            }
+        }
+
+        // Scanning indicator at the top
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .padding(top = 12.dp)
+        ) {
+            Text(
+                text = "正在扫描视频文件…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.Center)
+            )
         }
     }
 }
@@ -682,6 +708,7 @@ private fun ErrorFallback() {
 @Composable
 private fun VideoGridItem(
     video: VideoItem,
+    thumbnailUri: Uri?,
     isMultiSelectMode: Boolean,
     isSelected: Boolean,
     onClick: () -> Unit,
@@ -693,8 +720,6 @@ private fun VideoGridItem(
         animationSpec = tween(durationMillis = 200),
         label = "selectedAlpha"
     )
-
-    var thumbnailFailed by remember { mutableStateOf(false) }
 
     Card(
         modifier = modifier
@@ -710,27 +735,30 @@ private fun VideoGridItem(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Box(modifier = Modifier.aspectRatio(16f / 9f)) {
-            // Thumbnail with shimmer placeholder
-            if (!thumbnailFailed) {
-                ShimmerBackground()
-            }
+            // key(thumbnailUri) preserves Coil's painter across recomposition
+            key(thumbnailUri) {
+                var failed by remember { mutableStateOf(false) }
 
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(video.thumbnailUri)
-                    .crossfade(true)
-                    .build(),
-                contentDescription = video.name,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(MaterialTheme.shapes.medium),
-                contentScale = ContentScale.Crop,
-                onError = { thumbnailFailed = true }
-            )
+                if (!failed) {
+                    ShimmerBackground()
+                }
 
-            // Error fallback (shown when thumbnail can't be loaded)
-            if (thumbnailFailed) {
-                ErrorFallback()
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(thumbnailUri ?: video.thumbnailUri)
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = video.name,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(MaterialTheme.shapes.medium),
+                    contentScale = ContentScale.Crop,
+                    onError = { failed = true }
+                )
+
+                if (failed) {
+                    ErrorFallback()
+                }
             }
 
             // Gradient overlay at the bottom for text readability

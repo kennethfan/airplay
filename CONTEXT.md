@@ -6,7 +6,7 @@
 
 ## Thumbnail
 
-视频的预览缩略图。来源优先级：MediaStore.Video.Thumbnails（原生缩略图，快速、轻量）→ Coil VideoFrameDecoder（从视频文件取帧，兜底方案）。
+视频的预览缩略图。两阶段加载：先发列表（content URI 占位，UI 显示 ErrorFallback），后台异步生成缩略图（查询 MediaStore.Video.Thumbnails → MediaStore API 生成 → 缓存到 cacheDir/thumbs/）。更新后 UI 淡入真正缩略图。
 
 ## Shimmer
 
