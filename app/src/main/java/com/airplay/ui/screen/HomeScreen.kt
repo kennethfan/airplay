@@ -8,8 +8,10 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -42,6 +44,7 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -82,6 +85,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.airplay.model.CastDevice
 import com.airplay.model.VideoItem
 import com.airplay.ui.viewmodel.MainViewModel
@@ -619,6 +623,61 @@ private fun ShimmerGrid() {
 // Video grid item card (Netflix-style)
 // ──────────────────────────────────────────────────────────────
 
+// ──────────────────────────────────────────────────────────────
+// Shimmer loading placeholder for thumbnail
+// ──────────────────────────────────────────────────────────────
+
+@Composable
+private fun ShimmerBackground() {
+    val infiniteTransition = rememberInfiniteTransition(label = "shimmerThumb")
+    val translateX by infiniteTransition.animateFloat(
+        initialValue = -300f,
+        targetValue = 900f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shimmerSlide"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.horizontalGradient(
+                    colors = listOf(
+                        MaterialTheme.colorScheme.surfaceVariant,
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        MaterialTheme.colorScheme.surfaceVariant
+                    ),
+                    startX = translateX,
+                    endX = translateX + 600f
+                )
+            )
+    )
+}
+
+// ──────────────────────────────────────────────────────────────
+// Error fallback for broken thumbnails
+// ──────────────────────────────────────────────────────────────
+
+@Composable
+private fun ErrorFallback() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.Videocam,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+            modifier = Modifier.size(32.dp)
+        )
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun VideoGridItem(
@@ -629,6 +688,14 @@ private fun VideoGridItem(
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val selectedAlpha by animateFloatAsState(
+        targetValue = if (isSelected) 1f else 0f,
+        animationSpec = tween(durationMillis = 200),
+        label = "selectedAlpha"
+    )
+
+    var thumbnailFailed by remember { mutableStateOf(false) }
+
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -643,15 +710,28 @@ private fun VideoGridItem(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Box(modifier = Modifier.aspectRatio(16f / 9f)) {
-            // Thumbnail
+            // Thumbnail with shimmer placeholder
+            if (!thumbnailFailed) {
+                ShimmerBackground()
+            }
+
             AsyncImage(
-                model = video.thumbnailUri,
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(video.thumbnailUri)
+                    .crossfade(true)
+                    .build(),
                 contentDescription = video.name,
                 modifier = Modifier
                     .fillMaxSize()
                     .clip(MaterialTheme.shapes.medium),
-                contentScale = ContentScale.Crop
+                contentScale = ContentScale.Crop,
+                onError = { thumbnailFailed = true }
             )
+
+            // Error fallback (shown when thumbnail can't be loaded)
+            if (thumbnailFailed) {
+                ErrorFallback()
+            }
 
             // Gradient overlay at the bottom for text readability
             Box(
@@ -669,6 +749,35 @@ private fun VideoGridItem(
                     )
             )
 
+            // Multi-select overlay (animated)
+            if (selectedAlpha > 0f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            MaterialTheme.colorScheme.primary.copy(alpha = 0.2f * selectedAlpha)
+                        )
+                        .clip(MaterialTheme.shapes.medium)
+                )
+            }
+
+            // Selected state border overlay
+            if (selectedAlpha > 0f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(MaterialTheme.shapes.medium)
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.15f * selectedAlpha)
+                                )
+                            )
+                        )
+                )
+            }
+
             // Video title — overlaid on gradient
             Text(
                 text = video.name,
@@ -682,13 +791,13 @@ private fun VideoGridItem(
                     .padding(horizontal = 10.dp, vertical = 8.dp)
             )
 
-            // Duration pill — top-right corner
+            // Duration pill — bottom-right corner (YouTube style)
             Surface(
                 shape = RoundedCornerShape(4.dp),
                 color = Color.Black.copy(alpha = 0.6f),
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(6.dp)
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 6.dp, bottom = 6.dp)
             ) {
                 Text(
                     text = video.durationFormatted,
