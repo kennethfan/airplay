@@ -4,14 +4,6 @@
 
 将手机本地视频投屏到 UPnP/DLNA 媒体渲染器（智能电视、电视盒子等）。
 
-<table>
-<tr>
-<td><img src="docs/screenshots/home.jpg" width="240" alt="视频列表"/></td>
-<td><img src="docs/screenshots/player.jpg" width="240" alt="播放控制"/></td>
-<td><img src="docs/screenshots/casting.jpg" width="240" alt="投屏中"/></td>
-</tr>
-</table>
-
 ## 功能
 
 - **本地视频扫描** — 自动扫描设备上的视频文件，按标题/时长展示
@@ -74,8 +66,6 @@ AirPlayApp (Application)
   ├── VideoScanner — MediaStore 视频扫描
   └── CastForegroundService — 后台投屏通知
 ```
-
-<img src="docs/screenshots/architecture.png" width="480" alt="架构图"/>
 
 ## 许可证
 
