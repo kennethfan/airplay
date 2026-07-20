@@ -4,14 +4,6 @@
 
 Cast local videos from your phone to UPnP/DLNA media renderers (smart TVs, set-top boxes, etc.).
 
-<table>
-<tr>
-<td><img src="docs/screenshots/home.jpg" width="240" alt="Video list"/></td>
-<td><img src="docs/screenshots/player.jpg" width="240" alt="Playback controls"/></td>
-<td><img src="docs/screenshots/casting.jpg" width="240" alt="Casting in progress"/></td>
-</tr>
-</table>
-
 ## Features
 
 - **Local video scanning** — Automatically scan video files on device, display by title/duration
@@ -74,8 +66,6 @@ AirPlayApp (Application)
   ├── VideoScanner — MediaStore video scanning
   └── CastForegroundService — background casting notification
 ```
-
-<img src="docs/screenshots/architecture.png" width="480" alt="Architecture diagram"/>
 
 ## License
 
