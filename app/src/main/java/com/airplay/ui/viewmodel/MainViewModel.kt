@@ -350,6 +350,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         lastPositionMs = -1L
         stuckCount = 0
         var bufferingCount = 0
+        var negativePosCount = 0
         pollingJob = viewModelScope.launch(Dispatchers.IO) {
             while (true) {
                 delay(POLL_INTERVAL_MS)
@@ -383,9 +384,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 val pos = rm.getPositionMs()
                 if (pos < 0) {
-                    LogBuffer.d("MainViewModel", "getPositionMs returned -1, retrying")
+                    negativePosCount++
+                    if (negativePosCount >= STUCK_THRESHOLD) {
+                        LogBuffer.w("MainViewModel", "getPositionMs returned -1 ${negativePosCount} times -> skip")
+                        playNext()
+                        break
+                    }
                     continue
                 }
+                negativePosCount = 0
 
                 if (pos == lastPositionMs) {
                     stuckCount++
