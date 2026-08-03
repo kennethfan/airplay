@@ -98,7 +98,8 @@ import com.airplay.util.LogBuffer
 fun HomeScreen(
     viewModel: MainViewModel = viewModel(),
     onCast: (VideoItem, CastDevice) -> Unit,
-    onCastMultiple: (List<VideoItem>, CastDevice) -> Unit = { _, _ -> }
+    onCastMultiple: (List<VideoItem>, CastDevice) -> Unit = { _, _ -> },
+    onNavigateToPlayer: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val videos by viewModel.videos.collectAsState()
@@ -285,7 +286,7 @@ fun HomeScreen(
             // Queue banner — between TopAppBar and grid
             if (isQueueActive && currentQueueVideo != null && currentDevice != null) {
                 Card(
-                    onClick = { /* TODO: navigate to player */ },
+                    onClick = onNavigateToPlayer,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 6.dp),
