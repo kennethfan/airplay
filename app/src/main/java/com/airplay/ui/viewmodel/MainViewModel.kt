@@ -300,8 +300,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Toggle pause/play on the current renderer. */
     fun togglePlayPause() {
         when (_playbackState.value) {
-            PlaybackState.PLAYING -> renderManager?.pause()
-            PlaybackState.PAUSED -> renderManager?.play()
+            PlaybackState.PLAYING -> {
+                renderManager?.pause()
+                _playbackState.value = PlaybackState.PAUSED
+            }
+            PlaybackState.PAUSED -> {
+                renderManager?.play()
+                _playbackState.value = PlaybackState.PLAYING
+            }
             else -> {}
         }
     }
@@ -344,6 +350,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         lastPositionMs = -1L
         stuckCount = 0
         var bufferingCount = 0
+        var negativePosCount = 0
         pollingJob = viewModelScope.launch(Dispatchers.IO) {
             while (true) {
                 delay(POLL_INTERVAL_MS)
@@ -377,9 +384,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 val pos = rm.getPositionMs()
                 if (pos < 0) {
-                    LogBuffer.d("MainViewModel", "getPositionMs returned -1, retrying")
+                    negativePosCount++
+                    if (negativePosCount >= STUCK_THRESHOLD) {
+                        LogBuffer.w("MainViewModel", "getPositionMs returned -1 ${negativePosCount} times -> skip")
+                        playNext()
+                        break
+                    }
                     continue
                 }
+                negativePosCount = 0
 
                 if (pos == lastPositionMs) {
                     stuckCount++

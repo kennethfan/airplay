@@ -47,7 +47,8 @@ fun AirPlayContent(viewModel: MainViewModel) {
                 onCastMultiple = { videos, device ->
                     viewModel.castVideos(videos, device)
                     navController.navigate("player")
-                }
+                },
+                onNavigateToPlayer = { navController.navigate("player") }
             )
         }
 
