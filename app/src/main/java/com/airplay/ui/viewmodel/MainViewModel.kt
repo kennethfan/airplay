@@ -300,8 +300,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Toggle pause/play on the current renderer. */
     fun togglePlayPause() {
         when (_playbackState.value) {
-            PlaybackState.PLAYING -> renderManager?.pause()
-            PlaybackState.PAUSED -> renderManager?.play()
+            PlaybackState.PLAYING -> {
+                renderManager?.pause()
+                _playbackState.value = PlaybackState.PAUSED
+            }
+            PlaybackState.PAUSED -> {
+                renderManager?.play()
+                _playbackState.value = PlaybackState.PLAYING
+            }
             else -> {}
         }
     }
