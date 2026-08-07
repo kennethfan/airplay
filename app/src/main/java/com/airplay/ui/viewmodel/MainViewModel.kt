@@ -308,7 +308,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 renderManager?.play()
                 _playbackState.value = PlaybackState.PLAYING
             }
-            else -> {}
+            PlaybackState.STOPPED -> {
+                // Restart playback from the current video when the queue is still active
+                if (isQueueActive && _currentDevice.value != null) {
+                    LogBuffer.i("MainViewModel", "Restart playback from stopped state")
+                    playCurrent()
+                }
+            }
+            PlaybackState.BUFFERING -> {}
         }
     }
 
@@ -368,10 +375,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val testPos = rm.getPositionMs()
                     if (testPos >= 0) {
                         val currentVideo = _playQueue.value.getOrNull(_currentIndex.value)
-                        if (currentVideo != null && currentVideo.durationMs > 0 && testPos >= currentVideo.durationMs) {
-                            LogBuffer.d("MainViewModel", "Video already ended at ${testPos}ms/${currentVideo.durationMs}ms -> next")
-                            playNext()
-                            break
+                        val durationMs = currentVideo?.durationMs ?: 0L
+                        if (durationMs > 0 && testPos >= durationMs) {
+                            // Position at/after the video end. Wait for at least one more
+                            // poll before trusting it: right after switching videos the
+                            // renderer may still report the previous video's position
+                            // (SetAVTransportURI hasn't taken effect yet), which would
+                            // falsely skip a video that hasn't actually ended.
+                            if (bufferingCount >= 2) {
+                                LogBuffer.d("MainViewModel", "Video already ended at ${testPos}ms/${durationMs}ms -> next")
+                                playNext()
+                                break
+                            }
+                            continue
                         }
                         _playbackState.value = PlaybackState.PLAYING
                         lastPositionMs = testPos
