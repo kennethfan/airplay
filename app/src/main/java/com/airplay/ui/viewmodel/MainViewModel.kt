@@ -14,6 +14,7 @@ import com.airplay.model.PlaybackState
 import com.airplay.model.SortField
 import com.airplay.model.SortOption
 import com.airplay.model.VideoItem
+import com.airplay.service.CastForegroundService
 import com.airplay.util.LogBuffer
 import com.airplay.util.VideoScanner
 import com.airplay.util.VideoSorter
@@ -110,6 +111,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var pollingJob: Job? = null
     private var lastPositionMs: Long = -1L
     private var stuckCount: Int = 0
+    /** 前台服务是否由本 ViewModel 启动，避免重复 start/stop */
+    private var isCastServiceRunning: Boolean = false
 
     private val discoveryListener = object : DeviceDiscoveryManager.DiscoveryListener {
         override fun onDeviceFound(device: CastDevice) {
@@ -236,7 +239,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _playQueue.value = videos.toList()
         _currentIndex.value = 0
         _currentDevice.value = device
+        // 用户主动发起投屏时才启动前台服务（保活 + 通知栏）
+        startCastService()
         playCurrent()
+    }
+
+    /** 启动前台服务，重复调用无副作用（服务内部会复用同一实例） */
+    private fun startCastService() {
+        if (isCastServiceRunning) return
+        try {
+            CastForegroundService.start(getApplication())
+            isCastServiceRunning = true
+        } catch (e: Exception) {
+            // 后台启动受限时不阻塞投屏主流程
+            LogBuffer.w("MainViewModel", "startCastService failed", e)
+        }
+    }
+
+    /** 停止前台服务；未启动时为空操作 */
+    private fun stopCastService() {
+        if (!isCastServiceRunning) return
+        try {
+            CastForegroundService.stop(getApplication())
+            isCastServiceRunning = false
+        } catch (e: Exception) {
+            LogBuffer.w("MainViewModel", "stopCastService failed", e)
+        }
     }
 
     /** Play the item at _currentIndex. */
@@ -290,6 +318,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (nextIdx >= _playQueue.value.size) {
             LogBuffer.d("MainViewModel", "Queue finished")
             _playbackState.value = PlaybackState.STOPPED
+            // 队列播完，无需继续保活
+            stopCastService()
             return
         }
         _currentIndex.value = nextIdx
@@ -387,6 +417,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopCasting() {
         stopInternal()
         _playbackState.value = PlaybackState.STOPPED
+        // 已停止投屏，释放前台服务与 wake lock
+        stopCastService()
         // keep _playQueue and _currentIndex so UI can show "stopped" state
     }
 
@@ -399,6 +431,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _currentDevice.value = null
         renderManager = null
         _playbackState.value = PlaybackState.STOPPED
+        stopCastService()
         saveQueue()
     }
 

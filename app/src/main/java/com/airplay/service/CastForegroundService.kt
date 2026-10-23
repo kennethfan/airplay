@@ -25,7 +25,6 @@ class CastForegroundService : Service() {
         private const val NOTIFICATION_ID = 1
 
         private const val ACTION_START = "com.airplay.action.START_FOREGROUND"
-        private const val ACTION_STOP = "com.airplay.action.STOP_FOREGROUND"
 
         private var wakeLock: PowerManager.WakeLock? = null
 
@@ -41,10 +40,14 @@ class CastForegroundService : Service() {
         }
 
         @JvmStatic fun stop(context: Context) {
-            val intent = Intent(context, CastForegroundService::class.java).apply {
-                action = ACTION_STOP
+            // 用 stopService 而非 startService(ACTION_STOP)：
+            // 后者在 App 处于后台时会抛 IllegalStateException（后台启动服务限制）。
+            // 资源释放由 onDestroy 负责。
+            try {
+                context.stopService(Intent(context, CastForegroundService::class.java))
+            } catch (e: Exception) {
+                Log.w(TAG, "stopService failed", e)
             }
-            context.startService(intent)
         }
     }
 
@@ -61,12 +64,6 @@ class CastForegroundService : Service() {
                 val notification = buildNotification()
                 startForeground(NOTIFICATION_ID, notification)
                 Log.d(TAG, "Foreground service started")
-            }
-            ACTION_STOP -> {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                releaseWakeLock()
-                stopSelf()
-                Log.d(TAG, "Foreground service stopped")
             }
         }
         return START_STICKY

@@ -17,8 +17,10 @@ import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.net.URLConnection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -29,7 +31,25 @@ public class StreamServerManager extends NanoHTTPD {
     private static final int PORT = 8899;
     private static final Pattern RANGE_HEADER = Pattern.compile("bytes=(\\d+)-(\\d*)");
 
+    /** 允许流式读取的路径上限，避免无限增长 */
+    private static final int MAX_ALLOWED_PATHS = 200;
+
     private final Context context;
+
+    /**
+     * 已登记的允许访问路径。
+     *
+     * 只有通过 {@link #buildStreamUrl(String)} 投屏过的视频才会进入此集合，
+     * 从而阻止同网段其他设备构造 path 参数读取 App 可访问的任意文件。
+     * 使用 LRU 语义（超出上限时淘汰最早登记的条目）。
+     */
+    private final Set<String> allowedPaths = Collections.newSetFromMap(
+        new LinkedHashMap<String, Boolean>() {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+                return size() > MAX_ALLOWED_PATHS;
+            }
+        });
 
     public StreamServerManager(Context context) {
         super(PORT);
@@ -54,6 +74,10 @@ public class StreamServerManager extends NanoHTTPD {
 
     public String buildStreamUrl(String videoPath) {
         String ip = getLocalIpAddress();
+        // 登记允许访问的路径——serve() 只服务已登记路径
+        synchronized (allowedPaths) {
+            allowedPaths.add(videoPath);
+        }
         String url = "http://" + ip + ":" + PORT + "/stream?path=" + Uri.encode(videoPath);
         LogBuffer.d(TAG, "buildStreamUrl: ip=" + ip + " url=" + url);
         return url;
@@ -71,6 +95,19 @@ public class StreamServerManager extends NanoHTTPD {
 
         if (!"/stream".equals(uri) || path == null) {
             return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found");
+        }
+
+        // 白名单校验：只有通过 buildStreamUrl() 登记过的路径才允许读取，
+        // 防止局域网内其他设备构造任意 path 读取 App 私有文件。
+        // 注意：这里只做精确匹配，不对 path 做二次解码——
+        // 二次解码会让 %252F 之类的双重编码绕过白名单。
+        boolean allowed;
+        synchronized (allowedPaths) {
+            allowed = allowedPaths.contains(path);
+        }
+        if (!allowed) {
+            Log.w(TAG, "Rejected unregistered path: " + path);
+            return newFixedLengthResponse(Response.Status.FORBIDDEN, MIME_PLAINTEXT, "Forbidden");
         }
 
         String mimeType;

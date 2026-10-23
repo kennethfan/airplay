@@ -4,7 +4,6 @@ import android.app.Application;
 
 import com.airplay.dlna.DeviceDiscoveryManager;
 import com.airplay.dlna.StreamServerManager;
-import com.airplay.service.CastForegroundService;
 
 import java.io.IOException;
 
@@ -17,7 +16,10 @@ public class AirPlayApp extends Application {
         super.onCreate();
         initManagers();
         startStreamServer();
-        CastForegroundService.start(this);
+        // 注意：前台服务不再在此处启动。
+        // 原实现在 App 一打开就常驻通知栏并持有 4 小时 wake lock，
+        // 即使根本没有投屏；且 targetSdk 34 下从 Application 启动 FGS 受限。
+        // 现改为在真正开始投屏时启动（见 MainViewModel.castVideos）。
     }
 
     private void initManagers() {
