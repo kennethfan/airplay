@@ -67,6 +67,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _playbackState = MutableStateFlow(PlaybackState.STOPPED)
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
 
+    // 当前播放进度（毫秒），只读暴露给 UI 展示进度条。
+    // 由 3s 轮询驱动更新，不参与任何投屏决策。
+    private val _positionMs = MutableStateFlow(0L)
+    val positionMs: StateFlow<Long> = _positionMs.asStateFlow()
+
     // Currently casting to device
     private val _currentDevice = MutableStateFlow<CastDevice?>(null)
     val currentDevice: StateFlow<CastDevice?> = _currentDevice.asStateFlow()
@@ -187,6 +192,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val video = queue[idx]
 
         _selectedVideo.value = video
+        _positionMs.value = 0L
         val streamUrl = streamServer.buildStreamUrl(video.path)
         val metadata = buildDidlMetadata(video.name)
         LogBuffer.i("MainViewModel", "playCurrent[${idx + 1}/${queue.size}]: ${video.name} url=$streamUrl")
@@ -391,6 +397,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                         _playbackState.value = PlaybackState.PLAYING
                         lastPositionMs = testPos
+                        _positionMs.value = testPos.coerceAtLeast(0L)
                         LogBuffer.d("MainViewModel", "Playback detected at ${testPos}ms")
                     }
                     continue
@@ -430,6 +437,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 lastPositionMs = pos
+                _positionMs.value = pos
             }
         }
     }
