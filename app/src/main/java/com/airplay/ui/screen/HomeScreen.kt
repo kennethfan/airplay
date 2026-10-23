@@ -104,7 +104,7 @@ import coil.request.ImageRequest
 import com.airplay.model.CastDevice
 import com.airplay.model.VideoItem
 import com.airplay.ui.viewmodel.MainViewModel
-import com.airplay.ui.viewmodel.SortField
+import com.airplay.model.SortField
 import com.airplay.util.LogBuffer
 
 /** 网格外边距与卡片间距，统一从这里取，避免各处分叉 */

@@ -91,4 +91,7 @@ dependencies {
 
     // Coroutines
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0'
+
+    // 单元测试（纯 JVM，不依赖 Android 框架）
+    testImplementation 'junit:junit:4.13.2'
 }

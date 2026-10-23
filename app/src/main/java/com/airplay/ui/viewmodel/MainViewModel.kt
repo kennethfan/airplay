@@ -11,9 +11,12 @@ import com.airplay.dlna.MediaRenderManager
 import com.airplay.dlna.StreamServerManager
 import com.airplay.model.CastDevice
 import com.airplay.model.PlaybackState
+import com.airplay.model.SortField
+import com.airplay.model.SortOption
 import com.airplay.model.VideoItem
 import com.airplay.util.LogBuffer
 import com.airplay.util.VideoScanner
+import com.airplay.util.VideoSorter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -162,15 +165,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         saveSortOption(next)
     }
 
-    private fun applySort(list: List<VideoItem>, option: SortOption): List<VideoItem> {
-        // 主键按方向排序；次级键固定升序，保证相同数值时顺序稳定且不随方向翻转
-        val primary = when (option.field) {
-            SortField.DATE -> compareBy<VideoItem> { it.dateAdded }
-            SortField.DURATION -> compareBy { it.durationMs }
-            SortField.SIZE -> compareBy { it.fileSize }
-        }.let { if (option.descending) it.reversed() else it }
-        return list.sortedWith(primary.thenBy { it.name })
-    }
+    private fun applySort(list: List<VideoItem>, option: SortOption): List<VideoItem> =
+        VideoSorter.sort(list, option)
 
     private fun saveSortOption(option: SortOption) {
         try {
@@ -553,16 +549,3 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 }
-
-/** 视频列表可用的排序维度 */
-enum class SortField(val label: String) {
-    DATE("按时间"),
-    DURATION("按时长"),
-    SIZE("按大小"),
-}
-
-/** 排序方式：维度 + 方向 */
-data class SortOption(
-    val field: SortField,
-    val descending: Boolean,
-)
