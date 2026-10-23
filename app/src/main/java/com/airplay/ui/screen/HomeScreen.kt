@@ -45,6 +45,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
@@ -101,6 +104,7 @@ import coil.request.ImageRequest
 import com.airplay.model.CastDevice
 import com.airplay.model.VideoItem
 import com.airplay.ui.viewmodel.MainViewModel
+import com.airplay.ui.viewmodel.SortField
 import com.airplay.util.LogBuffer
 
 /** 网格外边距与卡片间距，统一从这里取，避免各处分叉 */
@@ -125,6 +129,7 @@ fun HomeScreen(
     val currentIndex by viewModel.currentIndex.collectAsState()
     val currentDevice by viewModel.currentDevice.collectAsState()
     val playbackState by viewModel.playbackState.collectAsState()
+    val sortOption by viewModel.sortOption.collectAsState()
 
     val isQueueActive = playQueue.isNotEmpty() && currentIndex >= 0
     val currentQueueVideo = viewModel.currentQueueVideo
@@ -142,6 +147,8 @@ fun HomeScreen(
     // 调试入口收进溢出菜单，不再占用主操作区
     var showOverflow by remember { mutableStateOf(false) }
     var showDebugDialog by remember { mutableStateOf(false) }
+    // 排序菜单
+    var showSortMenu by remember { mutableStateOf(false) }
 
     // Determine required permission based on API level
     val videoPermission = remember {
@@ -236,6 +243,66 @@ fun HomeScreen(
                                     MaterialTheme.colorScheme.onSurfaceVariant
                                 }
                             )
+                        }
+                        // 排序入口：点击当前项翻转升降序，点击其他项切换维度
+                        Box {
+                            IconButton(
+                                onClick = { showSortMenu = true },
+                                enabled = videos.isNotEmpty()
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Sort,
+                                    contentDescription = "排序",
+                                    tint = if (videos.isNotEmpty()) {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                                    }
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showSortMenu,
+                                onDismissRequest = { showSortMenu = false }
+                            ) {
+                                SortField.entries.forEach { field ->
+                                    val isCurrent = field == sortOption.field
+                                    DropdownMenuItem(
+                                        text = { Text(field.label) },
+                                        trailingIcon = {
+                                            if (isCurrent) {
+                                                Icon(
+                                                    if (sortOption.descending) {
+                                                        Icons.Default.ArrowDownward
+                                                    } else {
+                                                        Icons.Default.ArrowUpward
+                                                    },
+                                                    contentDescription = if (sortOption.descending) {
+                                                        "降序"
+                                                    } else {
+                                                        "升序"
+                                                    },
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        },
+                                        leadingIcon = {
+                                            if (isCurrent) {
+                                                Icon(
+                                                    Icons.Default.Check,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            viewModel.setSortField(field)
+                                            showSortMenu = false
+                                        }
+                                    )
+                                }
+                            }
                         }
                         Box {
                             IconButton(onClick = { showOverflow = true }) {
