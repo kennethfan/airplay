@@ -32,11 +32,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val PREFS_NAME = "airplay_queue"
         private const val POLL_INTERVAL_MS = 3000L
         private const val STUCK_THRESHOLD = 3 // 3 * 3s = 9s stuck before skip
+        private const val KEY_SORT_FIELD = "sort_field"
+        private const val KEY_SORT_DESC = "sort_descending"
     }
 
     // Video list
+    // _allVideos 保存扫描到的原始列表，_videos 是按当前排序方式派生出的展示列表。
+    // 排序只影响首页展示顺序，不改变播放队列（队列顺序由用户手动维护）。
+    private val _allVideos = MutableStateFlow<List<VideoItem>>(emptyList())
     private val _videos = MutableStateFlow<List<VideoItem>>(emptyList())
     val videos: StateFlow<List<VideoItem>> = _videos.asStateFlow()
+
+    // 当前排序方式，默认按时间降序（最新在前）
+    private val _sortOption = MutableStateFlow(SortOption(SortField.DATE, descending = true))
+    val sortOption: StateFlow<SortOption> = _sortOption.asStateFlow()
 
     // Video scanning loading state (separate from device discovery)
     // Initial value true so the first composition renders shimmer immediately,
@@ -66,6 +75,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Playback state
     private val _playbackState = MutableStateFlow(PlaybackState.STOPPED)
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
+
+    // 当前播放进度（毫秒），只读暴露给 UI 展示进度条。
+    // 由 3s 轮询驱动更新，不参与任何投屏决策。
+    private val _positionMs = MutableStateFlow(0L)
+    val positionMs: StateFlow<Long> = _positionMs.asStateFlow()
 
     // Currently casting to device
     private val _currentDevice = MutableStateFlow<CastDevice?>(null)
@@ -112,6 +126,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         discoveryManager.addListener(discoveryListener)
+        restoreSortOption()
     }
 
     fun loadVideos() {
@@ -121,10 +136,62 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch(Dispatchers.IO) {
             val videos = VideoScanner.scanVideos(getApplication())
-            _videos.value = videos
+            _allVideos.value = videos
+            _videos.value = applySort(videos, _sortOption.value)
 
             _isLoadingVideos.value = false
             tryRestoreQueue()
+        }
+    }
+
+    // ── 排序 ──
+
+    /**
+     * 设置排序方式。若点击的是当前字段，则翻转升降序；
+     * 否则切到新字段并使用该字段的默认方向（降序）。
+     */
+    fun setSortField(field: SortField) {
+        val current = _sortOption.value
+        val next = if (current.field == field) {
+            current.copy(descending = !current.descending)
+        } else {
+            SortOption(field, descending = true)
+        }
+        _sortOption.value = next
+        _videos.value = applySort(_allVideos.value, next)
+        saveSortOption(next)
+    }
+
+    private fun applySort(list: List<VideoItem>, option: SortOption): List<VideoItem> {
+        // 主键按方向排序；次级键固定升序，保证相同数值时顺序稳定且不随方向翻转
+        val primary = when (option.field) {
+            SortField.DATE -> compareBy<VideoItem> { it.dateAdded }
+            SortField.DURATION -> compareBy { it.durationMs }
+            SortField.SIZE -> compareBy { it.fileSize }
+        }.let { if (option.descending) it.reversed() else it }
+        return list.sortedWith(primary.thenBy { it.name })
+    }
+
+    private fun saveSortOption(option: SortOption) {
+        try {
+            app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_SORT_FIELD, option.field.name)
+                .putBoolean(KEY_SORT_DESC, option.descending)
+                .apply()
+        } catch (e: Exception) {
+            LogBuffer.e("MainViewModel", "saveSortOption failed", e)
+        }
+    }
+
+    private fun restoreSortOption() {
+        try {
+            val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val fieldName = prefs.getString(KEY_SORT_FIELD, null) ?: return
+            val field = SortField.entries.find { it.name == fieldName } ?: return
+            _sortOption.value = SortOption(field, prefs.getBoolean(KEY_SORT_DESC, true))
+        } catch (e: Exception) {
+            LogBuffer.e("MainViewModel", "restoreSortOption failed", e)
         }
     }
 
@@ -135,7 +202,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _pendingThumbnailIds.add(videoId)
 
         viewModelScope.launch(Dispatchers.IO) {
-            val video = _videos.value.find { it.id == videoId } ?: return@launch
+            val video = _allVideos.value.find { it.id == videoId } ?: return@launch
             val uri = VideoScanner.resolveThumbnail(
                 getApplication(), videoId, video.path, video.name
             )
@@ -187,6 +254,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val video = queue[idx]
 
         _selectedVideo.value = video
+        _positionMs.value = 0L
         val streamUrl = streamServer.buildStreamUrl(video.path)
         val metadata = buildDidlMetadata(video.name)
         LogBuffer.i("MainViewModel", "playCurrent[${idx + 1}/${queue.size}]: ${video.name} url=$streamUrl")
@@ -308,7 +376,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 renderManager?.play()
                 _playbackState.value = PlaybackState.PLAYING
             }
-            else -> {}
+            PlaybackState.STOPPED -> {
+                // Restart playback from the current video when the queue is still active
+                if (isQueueActive && _currentDevice.value != null) {
+                    LogBuffer.i("MainViewModel", "Restart playback from stopped state")
+                    playCurrent()
+                }
+            }
+            PlaybackState.BUFFERING -> {}
         }
     }
 
@@ -368,13 +443,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val testPos = rm.getPositionMs()
                     if (testPos >= 0) {
                         val currentVideo = _playQueue.value.getOrNull(_currentIndex.value)
-                        if (currentVideo != null && currentVideo.durationMs > 0 && testPos >= currentVideo.durationMs) {
-                            LogBuffer.d("MainViewModel", "Video already ended at ${testPos}ms/${currentVideo.durationMs}ms -> next")
-                            playNext()
-                            break
+                        val durationMs = currentVideo?.durationMs ?: 0L
+                        if (durationMs > 0 && testPos >= durationMs) {
+                            // Position at/after the video end. Wait for at least one more
+                            // poll before trusting it: right after switching videos the
+                            // renderer may still report the previous video's position
+                            // (SetAVTransportURI hasn't taken effect yet), which would
+                            // falsely skip a video that hasn't actually ended.
+                            if (bufferingCount >= 2) {
+                                LogBuffer.d("MainViewModel", "Video already ended at ${testPos}ms/${durationMs}ms -> next")
+                                playNext()
+                                break
+                            }
+                            continue
                         }
                         _playbackState.value = PlaybackState.PLAYING
                         lastPositionMs = testPos
+                        _positionMs.value = testPos.coerceAtLeast(0L)
                         LogBuffer.d("MainViewModel", "Playback detected at ${testPos}ms")
                     }
                     continue
@@ -414,6 +499,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 lastPositionMs = pos
+                _positionMs.value = pos
             }
         }
     }
@@ -467,3 +553,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 }
+
+/** 视频列表可用的排序维度 */
+enum class SortField(val label: String) {
+    DATE("按时间"),
+    DURATION("按时长"),
+    SIZE("按大小"),
+}
+
+/** 排序方式：维度 + 方向 */
+data class SortOption(
+    val field: SortField,
+    val descending: Boolean,
+)
