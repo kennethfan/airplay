@@ -11,6 +11,7 @@ import com.airplay.dlna.MediaRenderManager
 import com.airplay.dlna.StreamServerManager
 import com.airplay.model.CastDevice
 import com.airplay.model.PlaybackState
+import com.airplay.model.RecentPlay
 import com.airplay.model.SortField
 import com.airplay.model.SortOption
 import com.airplay.model.VideoItem
@@ -38,6 +39,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val STUCK_THRESHOLD = 3 // 3 * 3s = 9s stuck before skip
         private const val KEY_SORT_FIELD = "sort_field"
         private const val KEY_SORT_DESC = "sort_descending"
+        private const val KEY_RECENT_PLAYS = "recent_plays"
+        /** 最近播放最多保留条数 */
+        private const val MAX_RECENT_PLAYS = 20
     }
 
     // Video list
@@ -107,6 +111,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val isQueueActive: Boolean
         get() = _playQueue.value.isNotEmpty() && _currentIndex.value >= 0
 
+    // ── 最近播放 ──
+
+    /** 已解析出完整 VideoItem 的最近播放条目，供 UI 直接渲染 */
+    private val _recentPlays = MutableStateFlow<List<RecentPlay>>(emptyList())
+    val recentPlays: StateFlow<List<RecentPlay>> = _recentPlays.asStateFlow()
+
     private var renderManager: MediaRenderManager? = null
     private var pollingJob: Job? = null
     private var lastPositionMs: Long = -1L
@@ -147,8 +157,99 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             _isLoadingVideos.value = false
             tryRestoreQueue()
+            // 扫描完成后重建最近播放（依赖 _allVideos 回查，且自动剔除已删除文件）
+            refreshRecentPlays()
         }
     }
+
+    // ── 最近播放 ──
+
+    /**
+     * 记录一次投屏。同一视频（按 videoId）已存在时先移除，再插到最前，
+     * 保证列表按最近播放时间倒序且不重复。
+     */
+    private fun recordRecentPlay(video: VideoItem, device: CastDevice) {
+        val entry = RecentPlay(
+            videoId = video.id,
+            path = video.path,
+            name = video.name,
+            playedAt = System.currentTimeMillis(),
+            deviceName = device.name,
+        )
+        val updated = (listOf(entry) + _recentPlays.value.filterNot { it.videoId == video.id })
+            .take(MAX_RECENT_PLAYS)
+        _recentPlays.value = updated
+        saveRecentPlays(updated)
+    }
+
+    /** 清空最近播放记录 */
+    fun clearRecentPlays() {
+        _recentPlays.value = emptyList()
+        saveRecentPlays(emptyList())
+    }
+
+    /**
+     * 从持久化数据重建最近播放列表。
+     * 只保留仍能在当前扫描结果中找到的视频（文件被删除的记录自动丢弃）。
+     */
+    private fun refreshRecentPlays() {
+        try {
+            val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val json = prefs.getString(KEY_RECENT_PLAYS, null) ?: run {
+                _recentPlays.value = emptyList()
+                return
+            }
+            val arr = JSONArray(json)
+            val byId = _allVideos.value.associateBy { it.id }
+            val restored = mutableListOf<RecentPlay>()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val videoId = o.getLong("videoId")
+                // 文件已不存在则跳过
+                if (!byId.containsKey(videoId)) continue
+                restored.add(
+                    RecentPlay(
+                        videoId = videoId,
+                        path = o.getString("path"),
+                        name = o.getString("name"),
+                        playedAt = o.getLong("playedAt"),
+                        deviceName = o.optString("deviceName", ""),
+                    )
+                )
+            }
+            _recentPlays.value = restored.take(MAX_RECENT_PLAYS)
+        } catch (e: Exception) {
+            LogBuffer.e("MainViewModel", "refreshRecentPlays failed", e)
+            _recentPlays.value = emptyList()
+        }
+    }
+
+    private fun saveRecentPlays(list: List<RecentPlay>) {
+        try {
+            val arr = JSONArray()
+            list.forEach { r ->
+                arr.put(
+                    org.json.JSONObject().apply {
+                        put("videoId", r.videoId)
+                        put("path", r.path)
+                        put("name", r.name)
+                        put("playedAt", r.playedAt)
+                        put("deviceName", r.deviceName)
+                    }
+                )
+            }
+            app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_RECENT_PLAYS, arr.toString())
+                .apply()
+        } catch (e: Exception) {
+            LogBuffer.e("MainViewModel", "saveRecentPlays failed", e)
+        }
+    }
+
+    /** 用 videoId 从当前扫描结果回查完整 VideoItem（含最新缩略图） */
+    fun findVideoById(videoId: Long): VideoItem? =
+        _allVideos.value.find { it.id == videoId }
 
     // ── 排序 ──
 
@@ -301,6 +402,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 renderManager = manager
                 _playbackState.value = PlaybackState.BUFFERING
                 manager.playUri(streamUrl, metadata)
+                // 已成功向渲染器下发播放指令，记入最近播放
+                recordRecentPlay(video, device)
                 delay(1000)
                 startPlaybackPolling()
             } catch (e: Exception) {

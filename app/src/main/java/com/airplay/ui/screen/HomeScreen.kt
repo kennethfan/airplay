@@ -37,6 +37,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items as lazyRowItems
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -130,6 +133,7 @@ fun HomeScreen(
     val currentDevice by viewModel.currentDevice.collectAsState()
     val playbackState by viewModel.playbackState.collectAsState()
     val sortOption by viewModel.sortOption.collectAsState()
+    val recentPlays by viewModel.recentPlays.collectAsState()
 
     val isQueueActive = playQueue.isNotEmpty() && currentIndex >= 0
     val currentQueueVideo = viewModel.currentQueueVideo
@@ -371,6 +375,25 @@ fun HomeScreen(
                 )
             }
 
+            // 最近播放：横向滚动区，无记录时整块隐藏
+            if (recentPlays.isNotEmpty() && !isMultiSelectMode && !permissionDenied) {
+                RecentPlayRow(
+                    recentPlays = recentPlays,
+                    thumbnails = thumbnails,
+                    resolveThumbnail = { viewModel.resolveThumbnail(it) },
+                    onItemClick = { recent ->
+                        // 用 videoId 回查完整对象；文件已删除则忽略
+                        val video = viewModel.findVideoById(recent.videoId)
+                        if (video != null) {
+                            pendingSingleVideo = video
+                            pendingMultiVideos = null
+                            showDeviceSheet = true
+                        }
+                    },
+                    onClear = { viewModel.clearRecentPlays() }
+                )
+            }
+
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -499,6 +522,138 @@ fun HomeScreen(
                 pendingMultiVideos = null
             },
             onRefresh = { viewModel.refreshDiscovery() }
+        )
+    }
+}
+
+// ──────────────────────────────────────────────────────────────
+// 最近播放（横向滚动区）
+// ──────────────────────────────────────────────────────────────
+
+@Composable
+private fun RecentPlayRow(
+    recentPlays: List<com.airplay.model.RecentPlay>,
+    thumbnails: Map<Long, Uri>,
+    resolveThumbnail: (Long) -> Unit,
+    onItemClick: (com.airplay.model.RecentPlay) -> Unit,
+    onClear: () -> Unit
+) {
+    val now = remember(recentPlays) { System.currentTimeMillis() }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = GridHorizontalPadding, end = 8.dp, top = 8.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "最近播放",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(
+                onClick = onClear,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    "清空",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = GridHorizontalPadding),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            lazyRowItems(recentPlays, key = { it.videoId }) { recent ->
+                LaunchedEffect(recent.videoId) { resolveThumbnail(recent.videoId) }
+                RecentPlayCard(
+                    recent = recent,
+                    thumbnailUri = thumbnails[recent.videoId],
+                    relativeTime = com.airplay.util.RelativeTime.format(recent.playedAt, now),
+                    onClick = { onItemClick(recent) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecentPlayCard(
+    recent: com.airplay.model.RecentPlay,
+    thumbnailUri: Uri?,
+    relativeTime: String,
+    onClick: () -> Unit
+) {
+    val shape = MaterialTheme.shapes.medium
+    Column(
+        modifier = Modifier
+            .width(140.dp)
+            .clip(shape)
+            .clickable(onClick = onClick)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .clip(shape)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+        ) {
+            if (thumbnailUri != null) {
+                AsyncImage(
+                    model = thumbnailUri,
+                    contentDescription = recent.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Videocam,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+
+            // 播放角标，暗示可再次投屏
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(28.dp)
+                    .background(Color.Black.copy(alpha = 0.45f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Text(
+            text = recent.name,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = relativeTime,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
