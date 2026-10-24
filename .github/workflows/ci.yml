@@ -2,7 +2,8 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [master]
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -39,6 +40,10 @@ jobs:
       - name: Run lint
         run: ./gradlew lint
 
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest
+
+      # 未提供 KEYSTORE_PATH 时构建出未签名 APK，仅用于验证 release 构建（含 R8 混淆）可通过
       - name: Build release APK
         run: ./gradlew assembleRelease
 

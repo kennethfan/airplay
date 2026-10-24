@@ -18,8 +18,10 @@ android {
 
     signingConfigs {
         release {
+            // 仅当提供了 keystore 路径时才配置签名。
+            // 未提供时（本地/CI 无 secrets）构建出未签名包，而不是直接失败。
             def keystorePath = System.getenv('KEYSTORE_PATH')
-            if (keystorePath != null && !keystorePath.isEmpty()) {
+            if (keystorePath != null && !keystorePath.trim().isEmpty()) {
                 storeFile file(keystorePath)
                 storePassword System.getenv('KEYSTORE_PASSWORD') ?: ''
                 keyAlias System.getenv('KEY_ALIAS') ?: ''
@@ -30,7 +32,11 @@ android {
 
     buildTypes {
         release {
-            signingConfig signingConfigs.release
+            // 有 keystore 才绑定签名配置；否则产出未签名 APK（可用于 CI 的构建校验）
+            def keystorePath = System.getenv('KEYSTORE_PATH')
+            if (keystorePath != null && !keystorePath.trim().isEmpty()) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
