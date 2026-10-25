@@ -37,6 +37,8 @@ import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
@@ -95,6 +97,7 @@ fun PlayerScreen(
     val allVideos by viewModel.videos.collectAsState()
     val positionMs by viewModel.positionMs.collectAsState()
     val thumbnails by viewModel.thumbnailUris.collectAsState()
+    val favoriteIds by viewModel.favoriteIds.collectAsState()
 
     var queueExpanded by remember { mutableStateOf(false) }
     var showAddSheet by remember { mutableStateOf(false) }
@@ -129,6 +132,21 @@ fun PlayerScreen(
                             Icons.Default.Close,
                             contentDescription = "关闭",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                actions = {
+                    // 收藏当前正在投屏的视频；状态跟随 video.id，切换队列时自动更新
+                    val isFavorite = video.id in favoriteIds
+                    IconButton(onClick = { viewModel.toggleFavorite(video) }) {
+                        Icon(
+                            if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                            contentDescription = if (isFavorite) "取消收藏" else "收藏",
+                            tint = if (isFavorite) {
+                                MaterialTheme.colorScheme.secondary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
                         )
                     }
                 },
