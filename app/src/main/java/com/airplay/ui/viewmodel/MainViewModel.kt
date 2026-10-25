@@ -18,6 +18,7 @@ import com.airplay.model.SortOption
 import com.airplay.model.VideoItem
 import com.airplay.service.CastForegroundService
 import com.airplay.util.LogBuffer
+import com.airplay.util.PlaybackDecider
 import com.airplay.util.VideoScanner
 import com.airplay.util.VideoSorter
 import kotlinx.coroutines.Dispatchers
@@ -39,8 +40,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     companion object {
         private const val PREFS_NAME = "airplay_queue"
-        private const val POLL_INTERVAL_MS = 3000L
-        private const val STUCK_THRESHOLD = 3 // 3 * 3s = 9s stuck before skip
+        // 轮询间隔与各类阈值统一由 PlaybackDecider 提供，避免两处定义漂移
+        private const val POLL_INTERVAL_MS = PlaybackDecider.POLL_INTERVAL_MS
         private const val KEY_SORT_FIELD = "sort_field"
         private const val KEY_SORT_DESC = "sort_descending"
         private const val KEY_RECENT_PLAYS = "recent_plays"
@@ -680,80 +681,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         stuckCount = 0
         var bufferingCount = 0
         var negativePosCount = 0
+        // 切歌时的基准位置：用于识别 renderer 是否仍在报上一个视频的位置
+        var baselinePos = -1L
         pollingJob = viewModelScope.launch(Dispatchers.IO) {
             while (true) {
                 delay(POLL_INTERVAL_MS)
                 val rm = renderManager ?: break
                 val state = _playbackState.value
 
-                // If still BUFFERING, try to detect when playback actually starts
+                // ── 缓冲阶段 ──
                 if (state == PlaybackState.BUFFERING) {
                     bufferingCount++
-                    if (bufferingCount > 12) { // 60s timeout on buffering
-                        LogBuffer.w("MainViewModel", "Buffering timeout -> trying next")
-                        playNext()
-                        break
-                    }
-                    val testPos = rm.getPositionMs()
-                    if (testPos >= 0) {
-                        val currentVideo = _playQueue.value.getOrNull(_currentIndex.value)
-                        val durationMs = currentVideo?.durationMs ?: 0L
-                        if (durationMs > 0 && testPos >= durationMs) {
-                            // Position at/after the video end. Wait for at least one more
-                            // poll before trusting it: right after switching videos the
-                            // renderer may still report the previous video's position
-                            // (SetAVTransportURI hasn't taken effect yet), which would
-                            // falsely skip a video that hasn't actually ended.
-                            if (bufferingCount >= 2) {
-                                LogBuffer.d("MainViewModel", "Video already ended at ${testPos}ms/${durationMs}ms -> next")
-                                playNext()
-                                break
-                            }
-                            continue
+                    val pos = rm.getPositionMs()
+                    val durationMs = _playQueue.value.getOrNull(_currentIndex.value)?.durationMs ?: 0L
+
+                    when (PlaybackDecider.decideBuffering(pos, durationMs, bufferingCount, baselinePos)) {
+                        PlaybackDecider.Decision.NEXT -> {
+                            LogBuffer.d("MainViewModel", "Buffering -> next (pos=$pos, dur=$durationMs, n=$bufferingCount)")
+                            playNext()
+                            break
                         }
-                        _playbackState.value = PlaybackState.PLAYING
-                        lastPositionMs = testPos
-                        _positionMs.value = testPos.coerceAtLeast(0L)
-                        LogBuffer.d("MainViewModel", "Playback detected at ${testPos}ms")
+                        PlaybackDecider.Decision.STARTED -> {
+                            _playbackState.value = PlaybackState.PLAYING
+                            lastPositionMs = pos
+                            _positionMs.value = pos.coerceAtLeast(0L)
+                            LogBuffer.d("MainViewModel", "Playback detected at ${pos}ms")
+                        }
+                        PlaybackDecider.Decision.CONTINUE -> {
+                            // 记录基准位置：首次拿到有效位置时记下，用于后续识别旧值
+                            if (pos >= 0 && baselinePos < 0) baselinePos = pos
+                        }
                     }
                     continue
                 }
 
                 if (state != PlaybackState.PLAYING) continue
 
+                // ── 播放阶段 ──
                 val pos = rm.getPositionMs()
-                if (pos < 0) {
-                    negativePosCount++
-                    if (negativePosCount >= STUCK_THRESHOLD) {
-                        LogBuffer.w("MainViewModel", "getPositionMs returned -1 ${negativePosCount} times -> skip")
-                        playNext()
-                        break
-                    }
-                    continue
-                }
-                negativePosCount = 0
+                // 维护连续 -1 计数（决策函数只读，不修改外部状态）
+                if (pos < 0) negativePosCount++ else negativePosCount = 0
 
-                if (pos == lastPositionMs) {
-                    stuckCount++
-                    val currentVideo = _playQueue.value.getOrNull(_currentIndex.value)
-                    val effectiveThreshold = if (currentVideo != null && currentVideo.durationMs > 0 && currentVideo.durationMs < POLL_INTERVAL_MS) 1 else STUCK_THRESHOLD
-                    if (stuckCount >= effectiveThreshold) {
-                        LogBuffer.d("MainViewModel", "Playback stuck at ${pos}ms after ${effectiveThreshold * POLL_INTERVAL_MS / 1000}s -> skip")
+                val durationMs = _playQueue.value.getOrNull(_currentIndex.value)?.durationMs ?: 0L
+                // 位置未变则累加卡住计数；变化则清零
+                if (pos >= 0 && pos == lastPositionMs) stuckCount++ else if (pos >= 0) stuckCount = 0
+
+                when (PlaybackDecider.decidePlaying(pos, lastPositionMs, durationMs, stuckCount, negativePosCount)) {
+                    PlaybackDecider.Decision.NEXT -> {
+                        LogBuffer.d("MainViewModel", "Playing -> next (pos=$pos, last=$lastPositionMs, dur=$durationMs, stuck=$stuckCount, neg=$negativePosCount)")
+                        // 接近片尾时稍作等待，避免电视端还没播完就切走
+                        if (pos >= 0 && durationMs > 0 && pos + PlaybackDecider.NEAR_END_MARGIN_MS >= durationMs) {
+                            delay(PlaybackDecider.NEAR_END_MARGIN_MS)
+                        }
                         playNext()
                         break
                     }
-                } else {
-                    stuckCount = 0
-                    val video = _playQueue.value.getOrNull(_currentIndex.value)
-                    if (video != null && video.durationMs > 0 && pos + 3000 >= video.durationMs) {
-                        LogBuffer.d("MainViewModel", "Near end (${pos}ms/${video.durationMs}ms), waiting 3s then next")
-                        delay(3000)
-                        playNext()
-                        break
+                    PlaybackDecider.Decision.STARTED -> {
+                        // 播放阶段不会返回 STARTED
+                    }
+                    PlaybackDecider.Decision.CONTINUE -> {
+                        if (pos >= 0) {
+                            lastPositionMs = pos
+                            _positionMs.value = pos
+                        }
                     }
                 }
-                lastPositionMs = pos
-                _positionMs.value = pos
             }
         }
     }
