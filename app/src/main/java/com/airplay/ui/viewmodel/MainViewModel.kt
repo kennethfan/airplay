@@ -10,6 +10,7 @@ import com.airplay.dlna.DeviceDiscoveryManager
 import com.airplay.dlna.MediaRenderManager
 import com.airplay.dlna.StreamServerManager
 import com.airplay.model.CastDevice
+import com.airplay.model.Favorite
 import com.airplay.model.PlaybackState
 import com.airplay.model.RecentPlay
 import com.airplay.model.SortField
@@ -23,8 +24,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 
@@ -42,6 +46,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_RECENT_PLAYS = "recent_plays"
         /** 最近播放最多保留条数 */
         private const val MAX_RECENT_PLAYS = 20
+        private const val KEY_FAVORITES = "favorites"
     }
 
     // Video list
@@ -117,6 +122,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _recentPlays = MutableStateFlow<List<RecentPlay>>(emptyList())
     val recentPlays: StateFlow<List<RecentPlay>> = _recentPlays.asStateFlow()
 
+    // ── 收藏 ──
+
+    /** 收藏条目，按收藏时间倒序 */
+    private val _favorites = MutableStateFlow<List<Favorite>>(emptyList())
+    val favorites: StateFlow<List<Favorite>> = _favorites.asStateFlow()
+
+    /** 已收藏的 videoId 集合，供卡片快速判断星标状态（避免每次 O(n) 遍历） */
+    val favoriteIds: StateFlow<Set<Long>> = _favorites
+        .map { list -> list.mapTo(HashSet()) { it.videoId } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
+    /** 是否只显示收藏 */
+    private val _showFavoritesOnly = MutableStateFlow(false)
+    val showFavoritesOnly: StateFlow<Boolean> = _showFavoritesOnly.asStateFlow()
+
     private var renderManager: MediaRenderManager? = null
     private var pollingJob: Job? = null
     private var lastPositionMs: Long = -1L
@@ -153,13 +173,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             val videos = VideoScanner.scanVideos(getApplication())
             _allVideos.value = videos
-            _videos.value = applySort(videos, _sortOption.value)
+            // 先重建收藏（依赖 _allVideos 回查），再据此派生展示列表
+            refreshFavorites()
+            rebuildVideoList()
 
             _isLoadingVideos.value = false
             tryRestoreQueue()
             // 扫描完成后重建最近播放（依赖 _allVideos 回查，且自动剔除已删除文件）
             refreshRecentPlays()
         }
+    }
+
+    /**
+     * 按当前排序方式与「只看收藏」筛选，从 [_allVideos] 派生 [_videos]。
+     * 排序与筛选都只影响首页展示，不改变播放队列。
+     */
+    private fun rebuildVideoList() {
+        val base = if (_showFavoritesOnly.value) {
+            val ids = _favorites.value.mapTo(HashSet()) { it.videoId }
+            _allVideos.value.filter { it.id in ids }
+        } else {
+            _allVideos.value
+        }
+        _videos.value = applySort(base, _sortOption.value)
     }
 
     // ── 最近播放 ──
@@ -251,6 +287,91 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun findVideoById(videoId: Long): VideoItem? =
         _allVideos.value.find { it.id == videoId }
 
+    // ── 收藏 ──
+
+    /** 切换收藏状态。已收藏则取消，未收藏则加入。 */
+    fun toggleFavorite(video: VideoItem) {
+        val current = _favorites.value
+        val updated = if (current.any { it.videoId == video.id }) {
+            current.filterNot { it.videoId == video.id }
+        } else {
+            listOf(
+                Favorite(
+                    videoId = video.id,
+                    path = video.path,
+                    name = video.name,
+                    addedAt = System.currentTimeMillis(),
+                )
+            ) + current
+        }
+        _favorites.value = updated
+        saveFavorites(updated)
+        // 取消收藏时若正开启「只看收藏」，需要把该视频从展示列表移除
+        if (_showFavoritesOnly.value) rebuildVideoList()
+        LogBuffer.d("MainViewModel", "toggleFavorite: ${video.name} -> ${updated.size} favorites")
+    }
+
+    /** 切换「只看收藏」筛选 */
+    fun setShowFavoritesOnly(enabled: Boolean) {
+        if (_showFavoritesOnly.value == enabled) return
+        _showFavoritesOnly.value = enabled
+        rebuildVideoList()
+    }
+
+    /** 从持久化数据重建收藏列表，丢弃已不存在的视频 */
+    private fun refreshFavorites() {
+        try {
+            val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val json = prefs.getString(KEY_FAVORITES, null) ?: run {
+                _favorites.value = emptyList()
+                return
+            }
+            val arr = JSONArray(json)
+            val byId = _allVideos.value.associateBy { it.id }
+            val restored = mutableListOf<Favorite>()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val videoId = o.getLong("videoId")
+                // 文件已不存在则跳过
+                if (!byId.containsKey(videoId)) continue
+                restored.add(
+                    Favorite(
+                        videoId = videoId,
+                        path = o.getString("path"),
+                        name = o.getString("name"),
+                        addedAt = o.getLong("addedAt"),
+                    )
+                )
+            }
+            _favorites.value = restored
+        } catch (e: Exception) {
+            LogBuffer.e("MainViewModel", "refreshFavorites failed", e)
+            _favorites.value = emptyList()
+        }
+    }
+
+    private fun saveFavorites(list: List<Favorite>) {
+        try {
+            val arr = JSONArray()
+            list.forEach { f ->
+                arr.put(
+                    org.json.JSONObject().apply {
+                        put("videoId", f.videoId)
+                        put("path", f.path)
+                        put("name", f.name)
+                        put("addedAt", f.addedAt)
+                    }
+                )
+            }
+            app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_FAVORITES, arr.toString())
+                .apply()
+        } catch (e: Exception) {
+            LogBuffer.e("MainViewModel", "saveFavorites failed", e)
+        }
+    }
+
     // ── 排序 ──
 
     /**
@@ -265,7 +386,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             SortOption(field, descending = true)
         }
         _sortOption.value = next
-        _videos.value = applySort(_allVideos.value, next)
+        // 走统一重建，保证「只看收藏」筛选同时生效
+        rebuildVideoList()
         saveSortOption(next)
     }
 

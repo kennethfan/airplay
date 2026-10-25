@@ -53,6 +53,8 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Lock
@@ -134,6 +136,8 @@ fun HomeScreen(
     val playbackState by viewModel.playbackState.collectAsState()
     val sortOption by viewModel.sortOption.collectAsState()
     val recentPlays by viewModel.recentPlays.collectAsState()
+    val favoriteIds by viewModel.favoriteIds.collectAsState()
+    val showFavoritesOnly by viewModel.showFavoritesOnly.collectAsState()
 
     val isQueueActive = playQueue.isNotEmpty() && currentIndex >= 0
     val currentQueueVideo = viewModel.currentQueueVideo
@@ -243,6 +247,20 @@ fun HomeScreen(
                                 contentDescription = "重新扫描",
                                 tint = if (isLoadingVideos) {
                                     MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                }
+                            )
+                        }
+                        // 收藏筛选：开启后只显示已收藏视频
+                        IconButton(
+                            onClick = { viewModel.setShowFavoritesOnly(!showFavoritesOnly) }
+                        ) {
+                            Icon(
+                                if (showFavoritesOnly) Icons.Default.Star else Icons.Default.StarBorder,
+                                contentDescription = if (showFavoritesOnly) "显示全部" else "只看收藏",
+                                tint = if (showFavoritesOnly) {
+                                    MaterialTheme.colorScheme.primary
                                 } else {
                                     MaterialTheme.colorScheme.onSurfaceVariant
                                 }
@@ -415,14 +433,26 @@ fun HomeScreen(
                     }
 
                     videos.isEmpty() -> {
-                        EmptyState(
-                            icon = Icons.Default.VideoLibrary,
-                            title = "未找到视频文件",
-                            description = "把视频放入设备存储后，点击下方按钮重新扫描",
-                            actionLabel = "重新扫描",
-                            onAction = { viewModel.loadVideos() },
-                            outlined = true
-                        )
+                        // 开启「只看收藏」但尚无收藏时，给出针对性引导
+                        if (showFavoritesOnly) {
+                            EmptyState(
+                                icon = Icons.Default.StarBorder,
+                                title = "还没有收藏的视频",
+                                description = "点击视频卡片左上角的星标即可收藏",
+                                actionLabel = "查看全部视频",
+                                onAction = { viewModel.setShowFavoritesOnly(false) },
+                                outlined = true
+                            )
+                        } else {
+                            EmptyState(
+                                icon = Icons.Default.VideoLibrary,
+                                title = "未找到视频文件",
+                                description = "把视频放入设备存储后，点击下方按钮重新扫描",
+                                actionLabel = "重新扫描",
+                                onAction = { viewModel.loadVideos() },
+                                outlined = true
+                            )
+                        }
                     }
 
                     else -> {
@@ -449,6 +479,8 @@ fun HomeScreen(
                                     thumbnailUri = resolvedThumb,
                                     isMultiSelectMode = isMultiSelectMode,
                                     isSelected = isSelected,
+                                    isFavorite = video.id in favoriteIds,
+                                    onToggleFavorite = { viewModel.toggleFavorite(video) },
                                     onClick = {
                                         if (isMultiSelectMode) {
                                             selectedVideos = if (isSelected) {
@@ -994,6 +1026,8 @@ private fun VideoGridItem(
     thumbnailUri: Uri?,
     isMultiSelectMode: Boolean,
     isSelected: Boolean,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -1077,6 +1111,30 @@ private fun VideoGridItem(
                         color = Color.White,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                     )
+                }
+
+                // 收藏星标：左上角，多选模式下隐藏（让位给选中态）
+                if (!isMultiSelectMode) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(4.dp)
+                            .size(30.dp)
+                            .background(Color.Black.copy(alpha = 0.32f), CircleShape)
+                            .clickable(onClick = onToggleFavorite),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                            contentDescription = if (isFavorite) "取消收藏" else "收藏",
+                            tint = if (isFavorite) {
+                                MaterialTheme.colorScheme.secondary
+                            } else {
+                                Color.White.copy(alpha = 0.85f)
+                            },
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
 
                 // 选中态：单层浅色蒙层 + 右上角对勾（不再叠加两层 overlay）
